@@ -42,6 +42,13 @@ export function XbtTab() {
   const [chunk, setChunk] = useState("0.25");
   const [postOnly, setPostOnly] = useState(true);
   const [tiers, setTiers] = useState<Array<{ price: string; pct: string }>>([]);
+  const [floatWarn, setFloatWarn] = useState("0.02");
+  const [strategy, setStrategy] = useState<"DCA" | "TIERS">("DCA");
+  const [intervalHours, setIntervalHours] = useState("6");
+  const [candleInterval, setCandleInterval] = useState("4h");
+  const [maPeriod, setMaPeriod] = useState("30");
+  const [maxPrice, setMaxPrice] = useState("0");
+  const [bands, setBands] = useState<Array<{ discountPct: string; chunks: string; budgetPct: string; intervalHours: string }>>([]);
   const [reset, setReset] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [note, setNote] = useState<string | undefined>(undefined);
@@ -59,6 +66,20 @@ export function XbtTab() {
       setChunk(String(s.config.chunkXbt));
       setPostOnly(s.config.postOnly);
       setTiers(s.config.tiers.map((t) => ({ price: String(t.price), pct: String(t.pct) })));
+      setFloatWarn(String(s.config.floatWarnBtc));
+      setStrategy(s.config.strategy);
+      setIntervalHours(String(s.config.dca.intervalHours));
+      setCandleInterval(s.config.dca.candleInterval);
+      setMaPeriod(String(s.config.dca.maPeriod));
+      setMaxPrice(String(s.config.dca.maxPrice));
+      setBands(
+        s.config.dca.bands.map((b) => ({
+          discountPct: String(b.discountPct),
+          chunks: String(b.chunks),
+          budgetPct: String(b.budgetPct),
+          intervalHours: String(b.intervalHours ?? s.config.dca.intervalHours),
+        }))
+      );
       setLoaded(true);
     }
   }
@@ -71,12 +92,22 @@ export function XbtTab() {
 
   const parsedTiers = tiers.map((t) => ({ price: Number(t.price), pct: Number(t.pct) }));
   const pctSum = parsedTiers.reduce((s, t) => s + (Number.isFinite(t.pct) ? t.pct : 0), 0);
-  const valid =
-    Number(budget) >= 0 &&
-    Number(chunk) > 0 &&
-    parsedTiers.length > 0 &&
-    parsedTiers.every((t) => t.price > 0 && t.pct > 0) &&
-    pctSum <= 100.0001;
+  const parsedBands = bands.map((b) => ({
+    discountPct: Number(b.discountPct),
+    chunks: Number(b.chunks),
+    budgetPct: Number(b.budgetPct),
+    intervalHours: Number(b.intervalHours),
+  }));
+  const bandPctSum = parsedBands.reduce((s, b) => s + (Number.isFinite(b.budgetPct) ? b.budgetPct : 0), 0);
+  const tiersValid = parsedTiers.length > 0 && parsedTiers.every((t) => t.price > 0 && t.pct > 0) && pctSum <= 100.0001;
+  const dcaValid =
+    Number(intervalHours) >= 0.25 &&
+    Number(maPeriod) >= 2 &&
+    Number(maxPrice) >= 0 &&
+    parsedBands.length > 0 &&
+    parsedBands.every((b) => Number.isFinite(b.discountPct) && b.chunks >= 0 && b.budgetPct > 0 && b.intervalHours >= 0.25) &&
+    bandPctSum <= 100.0001;
+  const valid = Number(budget) >= 0 && Number(chunk) > 0 && Number(floatWarn) >= 0 && (strategy === "DCA" ? dcaValid : tiersValid);
 
   async function save() {
     const r = await saveNeoxaConfig({
@@ -86,6 +117,9 @@ export function XbtTab() {
       chunkXbt: Number(chunk),
       postOnly,
       tiers: parsedTiers,
+      strategy,
+      floatWarnBtc: Number(floatWarn),
+      dca: { intervalHours: Number(intervalHours), candleInterval, maPeriod: Number(maPeriod), maxPrice: Number(maxPrice), bands: parsedBands },
       resetCounters: reset,
     });
     setReset(false);
@@ -108,6 +142,15 @@ export function XbtTab() {
 
   return (
     <div className="space-y-6 p-6">
+      {status.configured && status.float.low && (
+        <div className="bg-amber-950/60 border border-amber-700 rounded-lg p-4 text-sm text-amber-200">
+          <strong>Float low:</strong> only {fmtBtc(status.float.availableBtc)} BTC is available on Neoxa (warning level {status.float.warnBelowBtc} BTC). Deposit the
+          next tranche of BTC on the Neoxa website so the bot can keep buying.
+          {status.float.budgetRemainingBtc > 0
+            ? ` Budget still to deploy: ${status.float.budgetRemainingBtc.toFixed(4)} BTC.`
+            : " The configured budget is fully spent; raise Budget (and reset counters) before topping up."}
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Stat label="XBT/BTC last" value={t ? t.lastPrice.toFixed(8) : "-"} />
         <Stat label="Best bid / ask" value={t ? `${t.bestBid.toFixed(8)} / ${t.bestAsk.toFixed(8)}` : "-"} />
@@ -157,6 +200,10 @@ export function XbtTab() {
               <input className={`${inputCls} w-36`} type="number" step="0.001" min="0" value={budget} onChange={(e) => setBudget(e.target.value)} />
             </div>
             <div className="flex items-center gap-2">
+              <span className="w-44">Warn when BTC float below</span>
+              <input className={`${inputCls} w-36`} type="number" step="0.005" min="0" value={floatWarn} onChange={(e) => setFloatWarn(e.target.value)} />
+            </div>
+            <div className="flex items-center gap-2">
               <span className="w-44">Order size (XBT)</span>
               <input className={`${inputCls} w-36`} type="number" step="0.05" min="0" value={chunk} onChange={(e) => setChunk(e.target.value)} />
             </div>
@@ -164,6 +211,56 @@ export function XbtTab() {
               <input type="checkbox" checked={postOnly} onChange={(e) => setPostOnly(e.target.checked)} />
               Maker-only orders (post-only, lower fee)
             </label>
+            <div className="flex items-center gap-2">
+              <span className="w-44">Strategy</span>
+              <select className={`${inputCls} w-52`} value={strategy} onChange={(e) => setStrategy(e.target.value as "DCA" | "TIERS")}>
+                <option value="DCA">Drawdown DCA (vs moving average)</option>
+                <option value="TIERS">Fixed price tiers</option>
+              </select>
+            </div>
+            {strategy === "DCA" && (
+              <div className="space-y-2">
+                <div className="text-xs text-slate-500">
+                  Every interval the bot may buy N chunks, where N depends on how far the best ask is below the reference moving average of the exchange
+                  candles. Each band can only spend its own share of the budget.
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="w-44">Interval (hours)</span>
+                  <input className={`${inputCls} w-20`} type="number" step="0.5" min="0.25" value={intervalHours} onChange={(e) => setIntervalHours(e.target.value)} />
+                  <span>MA</span>
+                  <input className={`${inputCls} w-16`} type="number" step="1" min="2" value={maPeriod} onChange={(e) => setMaPeriod(e.target.value)} />
+                  <span>x</span>
+                  <select className={`${inputCls} w-20`} value={candleInterval} onChange={(e) => setCandleInterval(e.target.value)}>
+                    <option value="1h">1h</option>
+                    <option value="4h">4h</option>
+                    <option value="1d">1d</option>
+                  </select>
+                  <span>candles</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-44">Max buy price (BTC, 0 = off)</span>
+                  <input className={`${inputCls} w-36`} type="number" step="0.0001" min="0" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} />
+                </div>
+                <div className="text-xs text-slate-500">
+                  Bands: discount below the MA (negative = above it), chunks per interval, the band's own interval (shorter at deeper discounts), and its share of the budget.
+                </div>
+                {bands.map((b, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="w-14">Band {i + 1}</span>
+                    <input className={`${inputCls} w-16`} type="number" step="1" value={b.discountPct} onChange={(e) => setBands(bands.map((x, j) => (j === i ? { ...x, discountPct: e.target.value } : x)))} />
+                    <span>% below,</span>
+                    <input className={`${inputCls} w-14`} type="number" step="1" min="0" value={b.chunks} onChange={(e) => setBands(bands.map((x, j) => (j === i ? { ...x, chunks: e.target.value } : x)))} />
+                    <span>chunks every</span>
+                    <input className={`${inputCls} w-14`} type="number" step="0.5" min="0.25" value={b.intervalHours} onChange={(e) => setBands(bands.map((x, j) => (j === i ? { ...x, intervalHours: e.target.value } : x)))} />
+                    <span>h,</span>
+                    <input className={`${inputCls} w-16`} type="number" step="5" min="0" value={b.budgetPct} onChange={(e) => setBands(bands.map((x, j) => (j === i ? { ...x, budgetPct: e.target.value } : x)))} />
+                    <span>%</span>
+                  </div>
+                ))}
+                <div className={`text-xs ${bandPctSum > 100.0001 ? "text-rose-400" : "text-slate-600"}`}>budget share total: {bandPctSum}%</div>
+              </div>
+            )}
+            {strategy === "TIERS" && (
             <div>
               <div className="text-xs text-slate-500 mb-1">
                 Price tiers: a tier unlocks its share of the budget once the best ask is at or below its price.
@@ -191,6 +288,7 @@ export function XbtTab() {
               ))}
               <div className={`text-xs ${pctSum > 100.0001 ? "text-rose-400" : "text-slate-600"}`}>percent total: {pctSum}</div>
             </div>
+            )}
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={reset} onChange={(e) => setReset(e.target.checked)} />
               Reset spent / bought counters when saving (use after you top up the float)
@@ -203,6 +301,57 @@ export function XbtTab() {
         </Card>
 
         <div className="space-y-4">
+          {status.config.strategy === "DCA" && (
+            <Card title="DCA status">
+              <div className="text-xs text-slate-400 mb-2 space-y-0.5">
+                <div>
+                  Reference MA{status.config.dca.maPeriod} ({status.config.dca.candleInterval}):{" "}
+                  <span className="font-mono text-slate-200">{status.dca.ma ? status.dca.ma.toFixed(8) : "-"}</span>
+                  {status.dca.discountPct !== null && (
+                    <span className={status.dca.discountPct >= 0 ? " text-emerald-400" : " text-slate-400"}>
+                      {" "}
+                      ask is {Math.abs(status.dca.discountPct).toFixed(1)}% {status.dca.discountPct >= 0 ? "below" : "above"}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  Active band chunks this interval: {status.dca.windowChunks.toFixed(2)}
+                  {status.dca.nextWindowAt ? `; next interval starts ${new Date(status.dca.nextWindowAt).toLocaleTimeString()}` : ""}
+                </div>
+                <div className={status.dca.canBuyNow ? "text-emerald-400" : "text-amber-400"}>
+                  {status.dca.canBuyNow ? "can buy now" : `waiting: ${status.dca.reason ?? "no data"}`}
+                </div>
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-slate-500 text-xs">
+                    <th className="py-1">Band</th>
+                    <th>% below MA</th>
+                    <th>Chunks</th>
+                    <th>Spent / cap (BTC)</th>
+                    <th>State</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {status.dca.bands.map((x) => (
+                    <tr key={x.index} className="border-t border-slate-800/60 text-slate-300">
+                      <td className="py-1">{x.index}</td>
+                      <td>{x.discountPct}</td>
+                      <td>
+                        {x.chunks} / {x.intervalHours}h
+                      </td>
+                      <td className="font-mono">
+                        {x.spentBtc.toFixed(5)} / {x.capBtc.toFixed(5)}
+                      </td>
+                      <td className={x.active ? "text-emerald-400" : "text-slate-500"}>{x.active ? "active" : x.spentBtc >= x.capBtc - 1e-7 ? "used up" : "waiting"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
+
+          {status.config.strategy === "TIERS" && (
           <Card title="Tier status (current ask)">
             <table className="w-full text-sm">
               <thead>
@@ -229,6 +378,7 @@ export function XbtTab() {
               </tbody>
             </table>
           </Card>
+          )}
 
           <Card title="Neoxa API key (read + trade only)">
             <div className="space-y-2">

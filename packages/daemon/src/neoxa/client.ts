@@ -114,6 +114,15 @@ export class NeoxaClient {
     return r.ticker;
   }
 
+  /** Public OHLCV candles (oldest first not guaranteed; callers sort by time). */
+  async getCandles(pair: string, interval: string, limit: number): Promise<Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }>> {
+    const r = await this.request<{ candles: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }> }>(
+      "GET",
+      `/api/exchange/candles/${pair}?interval=${encodeURIComponent(interval)}&limit=${limit}`
+    );
+    return r.candles ?? [];
+  }
+
   async getBalances(): Promise<Record<string, NeoxaBalance>> {
     const r = await this.request<{ balances: Record<string, NeoxaBalance> }>("GET", "/api/exchange/balances", undefined, true);
     return r.balances ?? {};

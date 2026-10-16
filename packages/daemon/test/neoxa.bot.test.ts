@@ -98,7 +98,7 @@ describe("neoxa bot", () => {
     const db = openDatabase(":memory:");
     applyMigrations(db);
     store = new NeoxaStore(db);
-    store.setConfig({ enabled: true, mode: "LIVE", pair: "BTCB2_BTC", budgetBtc: 0.05, chunkXbt: 0.25, postOnly: true, tiers: TIERS });
+    store.setConfig({ strategy: "TIERS", enabled: true, mode: "LIVE", pair: "BTCB2_BTC", budgetBtc: 0.05, chunkXbt: 0.25, postOnly: true, tiers: TIERS });
   });
 
   it("does nothing while disabled, and only reports in DRY_RUN mode", async () => {

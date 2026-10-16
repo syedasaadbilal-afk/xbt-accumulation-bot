@@ -45,6 +45,151 @@ export function planNextChunk(params: { tiers: NeoxaTier[]; budgetBtc: number; s
   return { tierIndex: -1, priceCap: 0, remainingBtc: 0 };
 }
 
+// ---------------------------------------------------------------------------
+// Drawdown-scaled DCA: every `intervalHours` the bot may buy N chunks, where N
+// grows with how far the ask sits BELOW a reference moving average of the
+// exchange's own candles. Each band owns a share of the budget, so a long slide
+// cannot exhaust the money meant for deeper prices.
+// ---------------------------------------------------------------------------
+
+export interface DcaBand {
+  /** Active once the ask is at least this many % below the reference MA (negative = above it). */
+  discountPct: number;
+  /** Chunks (of chunkXbt) the bot may buy per interval while this band is the deepest active one. */
+  chunks: number;
+  /** This band's own interval in hours; falls back to DcaConfig.intervalHours. Deeper discount can use a shorter interval. */
+  intervalHours?: number;
+  /** Share of the total budget (percent) this band may spend in total. */
+  budgetPct: number;
+}
+
+export interface DcaConfig {
+  intervalHours: number;
+  /** Exchange candle interval used for the reference MA ("1h" | "4h" | "1d"). */
+  candleInterval: string;
+  maPeriod: number;
+  /** Hard ceiling for any buy price (BTC); 0 = off. */
+  maxPrice: number;
+  bands: DcaBand[];
+}
+
+export const DEFAULT_DCA: DcaConfig = {
+  intervalHours: 4,
+  candleInterval: "4h",
+  maPeriod: 30,
+  maxPrice: 0,
+  bands: [
+    { discountPct: -15, chunks: 1, intervalHours: 4, budgetPct: 10 },
+    { discountPct: 10, chunks: 1, intervalHours: 2, budgetPct: 20 },
+    { discountPct: 20, chunks: 1, intervalHours: 1, budgetPct: 25 },
+    { discountPct: 25, chunks: 2, intervalHours: 1, budgetPct: 25 },
+    { discountPct: 35, chunks: 3, intervalHours: 1, budgetPct: 20 },
+  ],
+};
+
+export interface BandWindow {
+  id: number;
+  chunks: number;
+}
+
+export function sortBands(bands: DcaBand[]): DcaBand[] {
+  return [...bands].sort((a, b) => a.discountPct - b.discountPct);
+}
+
+export interface Candle {
+  time: number;
+  close: number;
+}
+
+/** Simple moving average of the last `period` closes (including the forming candle, as the chart does). Null if not enough data. */
+export function maFromCandles(candles: Candle[], period: number): number | null {
+  const sorted = [...candles].sort((a, b) => a.time - b.time);
+  if (period < 1 || sorted.length < period) return null;
+  const last = sorted.slice(-period);
+  return last.reduce((s, c) => s + c.close, 0) / period;
+}
+
+export function windowIndex(now: number, intervalHours: number): number {
+  return Math.floor(now / (intervalHours * 3_600_000));
+}
+
+export interface DcaPlan {
+  /** Band index in sorted order, or -1 when nothing may be bought now. */
+  bandIndex: number;
+  bandKey: number | null;
+  priceCap: number;
+  remainingBtc: number;
+  discountPct: number;
+  chunksAllowed: number;
+  /** Chunks already bought in the active band's current window, and that window's id / length. */
+  windowChunks: number;
+  windowId: number;
+  intervalHours: number;
+  reason: string;
+}
+
+export function bandIntervalHours(dca: DcaConfig, band: DcaBand): number {
+  return band.intervalHours && band.intervalHours > 0 ? band.intervalHours : dca.intervalHours;
+}
+
+export function planDca(params: {
+  dca: DcaConfig;
+  budgetBtc: number;
+  bandSpent: Record<string, number>;
+  /** Per-band interval windows (keyed by band discountPct), see BandWindow. */
+  windows: Record<string, BandWindow>;
+  now: number;
+  ma: number;
+  bestAsk: number;
+  /** true when judging an already-open order (it already counts toward the window). */
+  ignoreWindow?: boolean;
+}): DcaPlan {
+  const none = (reason: string, discountPct: number): DcaPlan => ({
+    bandIndex: -1,
+    bandKey: null,
+    priceCap: 0,
+    remainingBtc: 0,
+    discountPct,
+    chunksAllowed: 0,
+    windowChunks: 0,
+    windowId: 0,
+    intervalHours: params.dca.intervalHours,
+    reason,
+  });
+  const bands = sortBands(params.dca.bands);
+  const discountPct = ((params.ma - params.bestAsk) / params.ma) * 100;
+  let idx = -1;
+  for (let i = 0; i < bands.length; i++) if (discountPct >= bands[i]!.discountPct) idx = i;
+  if (idx < 0) return none(`ask is ${(-discountPct).toFixed(1)}% above the reference, beyond the highest band`, discountPct);
+  const band = bands[idx]!;
+  if (params.dca.maxPrice > 0 && params.bestAsk > params.dca.maxPrice) return none("ask above the max price ceiling", discountPct);
+  if (band.chunks <= 0) return none("active band buys 0 chunks", discountPct);
+  const cap = (params.budgetBtc * band.budgetPct) / 100;
+  const remaining = cap - (params.bandSpent[String(band.discountPct)] ?? 0);
+  if (remaining <= 1e-7) return none(`band budget used (${band.budgetPct}% of budget)`, discountPct);
+  const hours = bandIntervalHours(params.dca, band);
+  const windowId = windowIndex(params.now, hours);
+  const w = params.windows[String(band.discountPct)];
+  const windowChunks = w && w.id === windowId ? w.chunks : 0;
+  if (!params.ignoreWindow && windowChunks >= band.chunks - 1e-6) {
+    return none(`interval quota reached (${band.chunks} chunk${band.chunks === 1 ? "" : "s"} per ${hours}h)`, discountPct);
+  }
+  const ceil = bands[0]!.discountPct;
+  const priceCap = Math.min(params.dca.maxPrice > 0 ? params.dca.maxPrice : Infinity, params.ma * (1 - ceil / 100));
+  return {
+    bandIndex: idx,
+    bandKey: band.discountPct,
+    priceCap,
+    remainingBtc: remaining,
+    discountPct,
+    chunksAllowed: band.chunks,
+    windowChunks,
+    windowId,
+    intervalHours: hours,
+    reason: "ok",
+  };
+}
+
 /** floor to `digits` decimals (for buy prices) without float drift */
 export function floorTo(value: number, digits: number): number {
   const f = 10 ** digits;

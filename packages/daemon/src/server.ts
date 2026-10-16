@@ -3,6 +3,7 @@ import fastifyStatic from "@fastify/static";
 import fs from "node:fs";
 import { hasNeoxaSecrets, writeNeoxaSecrets } from "./secrets.js";
 import type { NeoxaService } from "./neoxa/service.js";
+import { DEFAULT_DCA } from "./neoxa/strategy.js";
 
 export interface CreateServerOptions {
   neoxa: NeoxaService;
@@ -56,11 +57,22 @@ export async function createServer(opts: CreateServerOptions) {
           chunkXbt?: number;
           postOnly?: boolean;
           tiers?: Array<{ price?: number; pct?: number }>;
+          strategy?: string;
+          floatWarnBtc?: number;
+          dca?: {
+            intervalHours?: number;
+            candleInterval?: string;
+            maPeriod?: number;
+            maxPrice?: number;
+            bands?: Array<{ discountPct?: number; chunks?: number; budgetPct?: number; intervalHours?: number }>;
+          };
           resetCounters?: boolean;
         }
       | undefined;
-    const tiers = b?.tiers;
+    const current = neoxa.store.getConfig();
     const okNum = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+    const strategy = b?.strategy === "TIERS" ? "TIERS" : "DCA";
+    const tiers = b?.tiers ?? current.tiers;
     if (
       typeof b?.enabled !== "boolean" ||
       (b.mode !== "DRY_RUN" && b.mode !== "LIVE") ||
@@ -68,22 +80,63 @@ export async function createServer(opts: CreateServerOptions) {
       !okNum(b.budgetBtc) ||
       b.budgetBtc < 0 ||
       !okNum(b.chunkXbt) ||
-      b.chunkXbt <= 0 ||
-      !Array.isArray(tiers) ||
-      tiers.length < 1 ||
-      tiers.length > 5 ||
-      tiers.some((t) => !okNum(t.price) || t.price <= 0 || !okNum(t.pct) || t.pct <= 0)
+      b.chunkXbt <= 0
     ) {
       reply.code(400);
-      return { error: "invalid config: need enabled, mode, postOnly, budgetBtc>=0, chunkXbt>0 and 1-5 tiers with price>0 and pct>0" };
+      return { error: "invalid config: need enabled, mode, postOnly, budgetBtc>=0 and chunkXbt>0" };
     }
-    const pctSum = tiers.reduce((s, t) => s + (t.pct ?? 0), 0);
-    if (pctSum > 100.0001) {
+    if (tiers.length < 1 || tiers.length > 5 || tiers.some((t) => !okNum(t.price) || t.price <= 0 || !okNum(t.pct) || t.pct <= 0)) {
       reply.code(400);
-      return { error: `tier percentages add up to ${pctSum}; the total must not exceed 100` };
+      return { error: "invalid tiers: 1-5 tiers with price>0 and pct>0" };
     }
-    const current = neoxa.store.getConfig();
+    if (tiers.reduce((s, t) => s + (t.pct ?? 0), 0) > 100.0001) {
+      reply.code(400);
+      return { error: "tier percentages must not add up to more than 100" };
+    }
+    let dca = current.dca ?? DEFAULT_DCA;
+    if (b.dca) {
+      const d = b.dca;
+      const bands = d.bands;
+      if (
+        !okNum(d.intervalHours) || d.intervalHours < 0.25 || d.intervalHours > 168 ||
+        !["1h", "4h", "1d"].includes(d.candleInterval ?? "") ||
+        !okNum(d.maPeriod) || d.maPeriod < 2 || d.maPeriod > 200 ||
+        !okNum(d.maxPrice) || d.maxPrice < 0 ||
+        !Array.isArray(bands) || bands.length < 1 || bands.length > 8 ||
+        bands.some((x) => !okNum(x.discountPct) || x.discountPct < -100 || x.discountPct > 95 || !okNum(x.chunks) || x.chunks < 0 || x.chunks > 50 || !okNum(x.budgetPct) || x.budgetPct <= 0 || (x.intervalHours !== undefined && (!okNum(x.intervalHours) || x.intervalHours < 0.25 || x.intervalHours > 168)))
+      ) {
+        reply.code(400);
+        return { error: "invalid DCA settings (interval 0.25-168h, 1h/4h/1d candles, MA period 2-200, 1-8 bands with chunks>=0 and budget%>0)" };
+      }
+      if (new Set(bands.map((x) => x.discountPct)).size !== bands.length) {
+        reply.code(400);
+        return { error: "two bands have the same discount %" };
+      }
+      if (bands.reduce((s, x) => s + (x.budgetPct ?? 0), 0) > 100.0001) {
+        reply.code(400);
+        return { error: "band budget shares must not add up to more than 100%" };
+      }
+      dca = {
+        intervalHours: d.intervalHours,
+        candleInterval: d.candleInterval as string,
+        maPeriod: d.maPeriod,
+        maxPrice: d.maxPrice,
+        bands: bands.map((x) => ({
+          discountPct: x.discountPct as number,
+          chunks: x.chunks as number,
+          budgetPct: x.budgetPct as number,
+          ...(x.intervalHours !== undefined ? { intervalHours: x.intervalHours } : {}),
+        })),
+      };
+    }
+    if (b.floatWarnBtc !== undefined && (!okNum(b.floatWarnBtc) || b.floatWarnBtc < 0)) {
+      reply.code(400);
+      return { error: "floatWarnBtc must be a number >= 0" };
+    }
     neoxa.store.setConfig({
+      strategy,
+      dca,
+      floatWarnBtc: b.floatWarnBtc ?? current.floatWarnBtc ?? 0.02,
       enabled: b.enabled,
       mode: b.mode,
       pair: current.pair,
@@ -94,7 +147,7 @@ export async function createServer(opts: CreateServerOptions) {
     });
     if (b.resetCounters) {
       const st = neoxa.store.getState();
-      neoxa.store.setState({ ...st, spentBtc: 0, boughtXbt: 0 });
+      neoxa.store.setState({ ...st, spentBtc: 0, boughtXbt: 0, bandSpent: {}, windows: {} });
     }
     console.log(`[xbt] config changed via dashboard (enabled=${b.enabled}, mode=${b.mode}, budget=${b.budgetBtc} BTC).`);
     return { ok: true };
