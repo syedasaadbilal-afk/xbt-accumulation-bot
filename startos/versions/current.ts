@@ -1,8 +1,8 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 export const current = VersionInfo.of({
-  version: '0.1.2:0',
+  version: '0.1.3:0',
   releaseNotes: {
-    en_US: 'Network errors now show the real cause (DNS, timeout, refused) instead of "fetch failed"; 20 s request timeout.',
+    en_US: 'Phone alerts via ntfy: BTC float low and repeated errors, with a test button.',
   },
   migrations: { up: async ({ effects }) => {}, down: IMPOSSIBLE },
 })

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  neoxaAlertTest,
   fetchNeoxaStatus,
   neoxaCancelOpenOrder,
   neoxaRunNow,
@@ -43,6 +44,7 @@ export function XbtTab() {
   const [postOnly, setPostOnly] = useState(true);
   const [tiers, setTiers] = useState<Array<{ price: string; pct: string }>>([]);
   const [floatWarn, setFloatWarn] = useState("0.02");
+  const [alertTopic, setAlertTopic] = useState("");
   const [strategy, setStrategy] = useState<"DCA" | "TIERS">("DCA");
   const [intervalHours, setIntervalHours] = useState("6");
   const [candleInterval, setCandleInterval] = useState("4h");
@@ -67,6 +69,7 @@ export function XbtTab() {
       setPostOnly(s.config.postOnly);
       setTiers(s.config.tiers.map((t) => ({ price: String(t.price), pct: String(t.pct) })));
       setFloatWarn(String(s.config.floatWarnBtc));
+      setAlertTopic(s.config.alertTopic ?? "");
       setStrategy(s.config.strategy);
       setIntervalHours(String(s.config.dca.intervalHours));
       setCandleInterval(s.config.dca.candleInterval);
@@ -106,7 +109,13 @@ export function XbtTab() {
     Number(maxPrice) >= 0 &&
     parsedBands.length > 0 &&
     parsedBands.every((b) => Number.isFinite(b.discountPct) && b.chunks >= 0 && b.budgetPct > 0 && b.budgetPct <= 100 && b.intervalHours >= 0.25);
-  const valid = Number(budget) >= 0 && Number(chunk) > 0 && Number(floatWarn) >= 0 && (strategy === "DCA" ? dcaValid : tiersValid);
+  const topicValid = alertTopic.trim() === "" || /^[A-Za-z0-9_-]{8,64}$/.test(alertTopic.trim());
+  const valid = Number(budget) >= 0 && Number(chunk) > 0 && Number(floatWarn) >= 0 && topicValid && (strategy === "DCA" ? dcaValid : tiersValid);
+
+  async function testAlert() {
+    const r = await neoxaAlertTest();
+    setNote(r.ok ? "Test alert sent - check your phone." : `Test alert failed: ${r.error ?? "unknown error"}`);
+  }
 
   async function save() {
     const r = await saveNeoxaConfig({
@@ -118,6 +127,7 @@ export function XbtTab() {
       tiers: parsedTiers,
       strategy,
       floatWarnBtc: Number(floatWarn),
+      alertTopic: alertTopic.trim(),
       dca: { intervalHours: Number(intervalHours), candleInterval, maPeriod: Number(maPeriod), maxPrice: Number(maxPrice), bands: parsedBands },
       resetCounters: reset,
     });
@@ -201,6 +211,16 @@ export function XbtTab() {
             <div className="flex items-center gap-2">
               <span className="w-44">Warn when BTC float below</span>
               <input className={`${inputCls} w-36`} type="number" step="0.005" min="0" value={floatWarn} onChange={(e) => setFloatWarn(e.target.value)} />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="w-44">Phone alerts (ntfy topic)</span>
+              <input className={`${inputCls} w-64`} type="text" placeholder="empty = alerts off" value={alertTopic} onChange={(e) => setAlertTopic(e.target.value)} />
+              <button className={btnCls} disabled={!alertTopic.trim() || !topicValid} onClick={testAlert} title="Save settings first, then send a test">
+                Send test alert
+              </button>
+            </div>
+            <div className={`text-xs ${topicValid ? "text-slate-600" : "text-rose-400"}`}>
+              Subscribe to this topic in the ntfy iPhone app. Keep it private (it acts as the password). Save settings before testing.
             </div>
             <div className="flex items-center gap-2">
               <span className="w-44">Order size (XBT)</span>

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { hasNeoxaSecrets, writeNeoxaSecrets } from "./secrets.js";
 import type { NeoxaService } from "./neoxa/service.js";
 import { DEFAULT_DCA } from "./neoxa/strategy.js";
+import { TOPIC_RE } from "./neoxa/alerts.js";
 
 export interface CreateServerOptions {
   neoxa: NeoxaService;
@@ -59,6 +60,7 @@ export async function createServer(opts: CreateServerOptions) {
           tiers?: Array<{ price?: number; pct?: number }>;
           strategy?: string;
           floatWarnBtc?: number;
+          alertTopic?: string;
           dca?: {
             intervalHours?: number;
             candleInterval?: string;
@@ -133,10 +135,16 @@ export async function createServer(opts: CreateServerOptions) {
       reply.code(400);
       return { error: "floatWarnBtc must be a number >= 0" };
     }
+    const alertTopic = b.alertTopic === undefined ? (current.alertTopic ?? "") : b.alertTopic.trim();
+    if (alertTopic !== "" && !TOPIC_RE.test(alertTopic)) {
+      reply.code(400);
+      return { error: "alert topic must be 8-64 characters: letters, digits, - or _" };
+    }
     neoxa.store.setConfig({
       strategy,
       dca,
       floatWarnBtc: b.floatWarnBtc ?? current.floatWarnBtc ?? 0.02,
+      alertTopic,
       enabled: b.enabled,
       mode: b.mode,
       pair: current.pair,
@@ -153,6 +161,7 @@ export async function createServer(opts: CreateServerOptions) {
     return { ok: true };
   });
 
+  fastify.post("/api/alert-test", async () => neoxa.sendTestAlert());
   fastify.post("/api/cancel", async () => neoxa.cancelOpenOrder());
   fastify.post("/api/run-now", async () => {
     neoxa.tick().catch((err) => console.error("[xbt] manual tick failed:", err));

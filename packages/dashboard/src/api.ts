@@ -47,6 +47,7 @@ export interface NeoxaStatus {
     strategy: "DCA" | "TIERS";
     dca: DcaConfigDto;
     floatWarnBtc: number;
+    alertTopic: string;
     enabled: boolean;
     mode: BotMode;
     pair: string;
@@ -101,8 +102,17 @@ export const saveNeoxaConfig = (cfg: {
   strategy: "DCA" | "TIERS";
   dca: DcaConfigDto;
   floatWarnBtc: number;
+  alertTopic: string;
   resetCounters: boolean;
 }) => sendJson("PUT", "/api/config", cfg);
 export const saveNeoxaSecrets = (apiKey: string, apiSecret: string) => sendJson("PUT", "/api/secrets", { apiKey, apiSecret });
+export async function neoxaAlertTest(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch("/api/alert-test", { method: "POST" });
+    return (await res.json()) as { ok: boolean; error?: string };
+  } catch {
+    return { ok: false, error: "daemon unreachable" };
+  }
+}
 export const neoxaCancelOpenOrder = () => sendJson("POST", "/api/cancel");
 export const neoxaRunNow = () => sendJson("POST", "/api/run-now");

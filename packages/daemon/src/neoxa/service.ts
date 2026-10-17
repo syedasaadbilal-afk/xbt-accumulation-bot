@@ -1,6 +1,7 @@
 import type { DatabaseSyncLike } from "../db/types.js";
 import { hasNeoxaSecrets, readNeoxaSecrets } from "../secrets.js";
 import { NeoxaClient, type NeoxaBalance } from "./client.js";
+import { evaluateAlerts, sendNtfy } from "./alerts.js";
 import { runNeoxaTick, type NeoxaTickResult } from "./bot.js";
 import { NeoxaStore } from "./store.js";
 import { DEFAULT_DCA, bandIntervalHours, maFromCandles, planDca, planNextChunk, sortBands, sortTiers, windowIndex } from "./strategy.js";
@@ -47,12 +48,91 @@ export class NeoxaService {
     }
     this.running = true;
     try {
-      const res = await runNeoxaTick({ client: this.client(), store: this.store });
+      const client = this.client();
+      const res = await runNeoxaTick({ client, store: this.store });
       this.lastResult = res;
       this.lastTickAt = Date.now();
+      this.consecutiveErrors = res.action === "error" ? this.consecutiveErrors + 1 : 0;
       if (res.action !== "waiting" && res.action !== "idle") console.log(`[neoxa] ${res.action}: ${res.detail}`);
+      await this.checkAlerts(client, res).catch((err) => console.error("[neoxa] alert check failed:", err));
     } finally {
       this.running = false;
+    }
+  }
+
+  private consecutiveErrors = 0;
+  private lastFloatCheckAt = 0;
+
+  /** Push alerts (ntfy): float low (checked every 5 min, repeats at most daily) and repeated tick errors. */
+  private async checkAlerts(client: NeoxaClient, res: NeoxaTickResult): Promise<void> {
+    const cfg = this.store.getConfig();
+    const topic = cfg.alertTopic ?? "";
+    if (!topic) return;
+    const now = Date.now();
+    let state = this.store.getState();
+
+    let available: number | null = null;
+    if (now - this.lastFloatCheckAt >= 5 * 60_000) {
+      this.lastFloatCheckAt = now;
+      try {
+        available = (await client.getBalances())["BTC"]?.available ?? 0;
+      } catch {
+        available = null; // network trouble: the error alert path covers it
+      }
+    }
+    const d = evaluateAlerts({
+      now,
+      availableBtc: available,
+      warnBelowBtc: cfg.floatWarnBtc ?? 0.02,
+      lastFloatAlertAt: state.lastFloatAlertAt,
+      consecutiveErrors: this.consecutiveErrors,
+      lastErrorAlertAt: state.lastErrorAlertAt,
+    });
+    if (d.clearFloat) {
+      state = { ...state, lastFloatAlertAt: null };
+      this.store.setState(state);
+    }
+    if (d.sendFloat && available !== null) {
+      await sendNtfy({
+        topic,
+        title: "XBT bot: BTC float low",
+        message: `Only ${available.toFixed(5)} BTC available on Neoxa (warning level ${cfg.floatWarnBtc ?? 0.02}). Deposit the next tranche so the bot can keep buying.`,
+        priority: 4,
+        tags: "warning",
+        ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
+      });
+      state = { ...state, lastFloatAlertAt: now };
+      this.store.setState(state);
+    }
+    if (d.sendError) {
+      await sendNtfy({
+        topic,
+        title: "XBT bot: errors",
+        message: `The bot has failed ${this.consecutiveErrors} ticks in a row: ${res.detail.slice(0, 180)}`,
+        priority: 4,
+        tags: "rotating_light",
+        ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
+      });
+      this.store.setState({ ...state, lastErrorAlertAt: now });
+    }
+  }
+
+  /** Sends a test push so the owner can confirm the phone receives it. */
+  async sendTestAlert(): Promise<{ ok: boolean; error?: string }> {
+    const topic = this.store.getConfig().alertTopic ?? "";
+    if (!topic) return { ok: false, error: "set an alert topic first and save" };
+    try {
+      await sendNtfy({
+        topic,
+        title: "XBT bot: test alert",
+        message: "If you can read this, phone alerts work.",
+        priority: 3,
+        tags: "white_check_mark",
+        ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 

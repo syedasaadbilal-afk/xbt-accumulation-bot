@@ -11,6 +11,8 @@ export interface NeoxaConfig {
   dca?: DcaConfig;
   /** Dashboard warns when available BTC on the exchange falls below this (time to deposit the next tranche). */
   floatWarnBtc?: number;
+  /** ntfy topic for phone alerts; empty = alerts off. */
+  alertTopic?: string;
   enabled: boolean;
   /** DRY_RUN only reports what it would place; LIVE places real orders. */
   mode: BotMode;
@@ -35,6 +37,9 @@ export interface NeoxaState {
   windows: Record<string, BandWindow>;
   /** DCA: BTC spent per band, keyed by the band's discountPct. */
   bandSpent: Record<string, number>;
+  /** When the last float-low / error push alert went out (ms), or null. */
+  lastFloatAlertAt: number | null;
+  lastErrorAlertAt: number | null;
 }
 
 export interface NeoxaOrderRow {
@@ -53,6 +58,7 @@ export const DEFAULT_NEOXA_CONFIG: NeoxaConfig = {
   strategy: "DCA",
   dca: DEFAULT_DCA,
   floatWarnBtc: 0.02,
+  alertTopic: "",
   enabled: false,
   mode: "DRY_RUN",
   pair: "BTCB2_BTC",
@@ -67,7 +73,7 @@ export class NeoxaStore {
 
   getConfig(): NeoxaConfig {
     const row = this.db.prepare("SELECT * FROM neoxa_config WHERE id = 1").get() as
-      | { enabled: number; mode: string; pair: string; budget_btc: number; chunk_xbt: number; post_only: number; tiers_json: string; strategy: string; dca_json: string; float_warn_btc: number }
+      | { enabled: number; mode: string; pair: string; budget_btc: number; chunk_xbt: number; post_only: number; tiers_json: string; strategy: string; dca_json: string; float_warn_btc: number; alert_topic: string }
       | undefined;
     if (!row) {
       return {
@@ -94,6 +100,7 @@ export class NeoxaStore {
       strategy: row.strategy === "TIERS" ? "TIERS" : "DCA",
       dca,
       floatWarnBtc: row.float_warn_btc ?? 0.02,
+      alertTopic: row.alert_topic ?? "",
       enabled: row.enabled === 1,
       mode: row.mode === "LIVE" ? "LIVE" : "DRY_RUN",
       pair: row.pair,
@@ -107,11 +114,12 @@ export class NeoxaStore {
   setConfig(c: NeoxaConfig): void {
     this.db
       .prepare(
-        `INSERT INTO neoxa_config (id, enabled, mode, pair, budget_btc, chunk_xbt, post_only, tiers_json, strategy, dca_json, float_warn_btc, updated_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO neoxa_config (id, enabled, mode, pair, budget_btc, chunk_xbt, post_only, tiers_json, strategy, dca_json, float_warn_btc, alert_topic, updated_at)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, mode = excluded.mode, pair = excluded.pair, budget_btc = excluded.budget_btc,
            chunk_xbt = excluded.chunk_xbt, post_only = excluded.post_only, tiers_json = excluded.tiers_json,
-           strategy = excluded.strategy, dca_json = excluded.dca_json, float_warn_btc = excluded.float_warn_btc, updated_at = excluded.updated_at`
+           strategy = excluded.strategy, dca_json = excluded.dca_json, float_warn_btc = excluded.float_warn_btc,
+           alert_topic = excluded.alert_topic, updated_at = excluded.updated_at`
       )
       .run(
         c.enabled ? 1 : 0,
@@ -124,6 +132,7 @@ export class NeoxaStore {
         c.strategy ?? "DCA",
         JSON.stringify(c.dca ?? DEFAULT_DCA),
         c.floatWarnBtc ?? 0.02,
+        c.alertTopic ?? "",
         Date.now()
       );
   }
@@ -140,6 +149,8 @@ export class NeoxaStore {
           open_order_band: number | null;
           band_spent_json: string;
           windows_json: string;
+          last_float_alert_at: number | null;
+          last_error_alert_at: number | null;
         }
       | undefined;
     let bandSpent: Record<string, number> = {};
@@ -153,6 +164,8 @@ export class NeoxaStore {
       // keep {}
     }
     return {
+      lastFloatAlertAt: row?.last_float_alert_at ?? null,
+      lastErrorAlertAt: row?.last_error_alert_at ?? null,
       openOrderBand: row?.open_order_band ?? null,
       windows,
       bandSpent,
@@ -169,13 +182,14 @@ export class NeoxaStore {
     this.db
       .prepare(
         `INSERT INTO neoxa_state (id, spent_btc, bought_xbt, open_order_id, open_order_price, open_order_qty, open_order_placed_at,
-           open_order_band, band_spent_json, windows_json, updated_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           open_order_band, band_spent_json, windows_json, last_float_alert_at, last_error_alert_at, updated_at)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET spent_btc = excluded.spent_btc, bought_xbt = excluded.bought_xbt,
            open_order_id = excluded.open_order_id, open_order_price = excluded.open_order_price,
            open_order_qty = excluded.open_order_qty, open_order_placed_at = excluded.open_order_placed_at,
            open_order_band = excluded.open_order_band, band_spent_json = excluded.band_spent_json,
-           windows_json = excluded.windows_json, updated_at = excluded.updated_at`
+           windows_json = excluded.windows_json, last_float_alert_at = excluded.last_float_alert_at,
+           last_error_alert_at = excluded.last_error_alert_at, updated_at = excluded.updated_at`
       )
       .run(
         s.spentBtc,
@@ -187,6 +201,8 @@ export class NeoxaStore {
         s.openOrderBand,
         JSON.stringify(s.bandSpent),
         JSON.stringify(s.windows),
+        s.lastFloatAlertAt,
+        s.lastErrorAlertAt,
         Date.now()
       );
   }
