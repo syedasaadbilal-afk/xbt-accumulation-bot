@@ -105,8 +105,7 @@ export function XbtTab() {
     Number(maPeriod) >= 2 &&
     Number(maxPrice) >= 0 &&
     parsedBands.length > 0 &&
-    parsedBands.every((b) => Number.isFinite(b.discountPct) && b.chunks >= 0 && b.budgetPct > 0 && b.intervalHours >= 0.25) &&
-    bandPctSum <= 100.0001;
+    parsedBands.every((b) => Number.isFinite(b.discountPct) && b.chunks >= 0 && b.budgetPct > 0 && b.budgetPct <= 100 && b.intervalHours >= 0.25);
   const valid = Number(budget) >= 0 && Number(chunk) > 0 && Number(floatWarn) >= 0 && (strategy === "DCA" ? dcaValid : tiersValid);
 
   async function save() {
@@ -255,9 +254,24 @@ export function XbtTab() {
                     <span>h,</span>
                     <input className={`${inputCls} w-16`} type="number" step="5" min="0" value={b.budgetPct} onChange={(e) => setBands(bands.map((x, j) => (j === i ? { ...x, budgetPct: e.target.value } : x)))} />
                     <span>%</span>
+                    <button className="text-xs text-slate-500 hover:text-rose-400 px-1" disabled={bands.length <= 1} title="Remove this band" onClick={() => setBands(bands.filter((_, j) => j !== i))}>
+                      remove
+                    </button>
                   </div>
                 ))}
-                <div className={`text-xs ${bandPctSum > 100.0001 ? "text-rose-400" : "text-slate-600"}`}>budget share total: {bandPctSum}%</div>
+                <button
+                  className={btnCls}
+                  disabled={bands.length >= 8}
+                  onClick={() => setBands([...bands, { discountPct: "0", chunks: "1", budgetPct: "5", intervalHours: intervalHours }])}
+                >
+                  Add band
+                </button>
+                <div className={`text-xs ${bandPctSum > 100.0001 ? "text-amber-400" : "text-slate-600"}`}>
+                  band shares total: {bandPctSum}%.{" "}
+                  {bandPctSum > 100.0001
+                    ? "Shares overlap (total above 100%): each band is limited to its own share, and the overall Budget above is the hard cap for all bands together."
+                    : "Each band is limited to its share; the overall Budget is the hard cap."}
+                </div>
               </div>
             )}
             {strategy === "TIERS" && (
@@ -343,7 +357,7 @@ export function XbtTab() {
                       <td className="font-mono">
                         {x.spentBtc.toFixed(5)} / {x.capBtc.toFixed(5)}
                       </td>
-                      <td className={x.active ? "text-emerald-400" : "text-slate-500"}>{x.active ? "active" : x.spentBtc >= x.capBtc - 1e-7 ? "used up" : "waiting"}</td>
+                      <td className={x.active ? "text-emerald-400" : "text-slate-500"}>{x.active ? "active" : x.capBtc <= 0 ? "no budget" : x.spentBtc >= x.capBtc - 1e-7 ? "used up" : "waiting"}</td>
                     </tr>
                   ))}
                 </tbody>

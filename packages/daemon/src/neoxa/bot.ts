@@ -67,6 +67,7 @@ function makePlan(params: {
     dca,
     budgetBtc: cfg.budgetBtc,
     bandSpent: state.bandSpent,
+    totalSpent: state.spentBtc,
     windows: state.windows,
     now,
     ma: ma as number,

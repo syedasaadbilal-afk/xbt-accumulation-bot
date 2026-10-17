@@ -104,7 +104,7 @@ export class NeoxaService {
     }
     const discountPct = ma && ticker ? ((ma - ticker.bestAsk) / ma) * 100 : null;
     const nowMs = Date.now();
-    const planArgs = ma && ticker ? { dca: dcaCfg, budgetBtc: cfg.budgetBtc, bandSpent: state.bandSpent, windows: state.windows, now: nowMs, ma, bestAsk: ticker.bestAsk } : null;
+    const planArgs = ma && ticker ? { dca: dcaCfg, budgetBtc: cfg.budgetBtc, bandSpent: state.bandSpent, totalSpent: state.spentBtc, windows: state.windows, now: nowMs, ma, bestAsk: ticker.bestAsk } : null;
     const dcaPlan = planArgs ? planDca(planArgs) : null;
     const activeInfo = planArgs ? planDca({ ...planArgs, ignoreWindow: true }) : null;
     const activeBand = activeInfo ? activeInfo.bandIndex : -1;

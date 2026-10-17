@@ -136,6 +136,8 @@ export function planDca(params: {
   dca: DcaConfig;
   budgetBtc: number;
   bandSpent: Record<string, number>;
+  /** Total BTC spent so far across all bands; the overall budget is a hard cap even when band shares add up to more than 100%. */
+  totalSpent?: number;
   /** Per-band interval windows (keyed by band discountPct), see BandWindow. */
   windows: Record<string, BandWindow>;
   now: number;
@@ -164,9 +166,12 @@ export function planDca(params: {
   const band = bands[idx]!;
   if (params.dca.maxPrice > 0 && params.bestAsk > params.dca.maxPrice) return none("ask above the max price ceiling", discountPct);
   if (band.chunks <= 0) return none("active band buys 0 chunks", discountPct);
+  const totalLeft = params.budgetBtc - (params.totalSpent ?? 0);
+  if (totalLeft <= 1e-7) return none(`overall budget fully used (${params.budgetBtc} BTC)`, discountPct);
   const cap = (params.budgetBtc * band.budgetPct) / 100;
-  const remaining = cap - (params.bandSpent[String(band.discountPct)] ?? 0);
-  if (remaining <= 1e-7) return none(`band budget used (${band.budgetPct}% of budget)`, discountPct);
+  const bandLeft = cap - (params.bandSpent[String(band.discountPct)] ?? 0);
+  if (bandLeft <= 1e-7) return none(`band budget used (${band.budgetPct}% of budget)`, discountPct);
+  const remaining = Math.min(bandLeft, totalLeft);
   const hours = bandIntervalHours(params.dca, band);
   const windowId = windowIndex(params.now, hours);
   const w = params.windows[String(band.discountPct)];

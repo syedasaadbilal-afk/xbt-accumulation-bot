@@ -76,11 +76,20 @@ export class NeoxaClient {
       headers["X-API-Key"] = this.cfg.apiKey;
       headers["X-API-Secret"] = this.cfg.apiSecret;
     }
-    const res = await this.f(`${this.base}${path}`, {
-      method,
-      headers,
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
+    let res: Response;
+    try {
+      res = await this.f(`${this.base}${path}`, {
+        method,
+        headers,
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch (err) {
+      // Node's fetch hides the real reason in err.cause (ENOTFOUND, ETIMEDOUT, ECONNREFUSED, TLS...).
+      const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+      const why = cause?.code ?? cause?.message ?? (err instanceof Error ? err.message : String(err));
+      throw new Error(`Neoxa ${method} ${path} -> network error: ${why} (host ${this.base})`);
+    }
     const text = await res.text();
     let json: { success?: boolean; error?: string; code?: string } & Record<string, unknown>;
     try {

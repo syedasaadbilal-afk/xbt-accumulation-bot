@@ -48,6 +48,14 @@ describe("dca strategy", () => {
     expect(planDca({ ...base, bestAsk: ask, bandSpent: { "20": 0.0125 } }).bandIndex).toBe(-1);
   });
 
+  it("the overall budget caps all bands together, even when band shares add up to more than 100%", () => {
+    const dca = { ...DEFAULT_DCA, bands: DEFAULT_DCA.bands.map((b) => ({ ...b, budgetPct: 100 })) };
+    const ask = MA * 0.78; // band 20
+    const p = planDca({ ...base, dca, bestAsk: ask, totalSpent: 0.0475 });
+    expect(p.remainingBtc).toBeCloseTo(0.0025, 9); // 0.05 budget - 0.0475 spent
+    expect(planDca({ ...base, dca, bestAsk: ask, totalSpent: 0.05 }).bandIndex).toBe(-1);
+  });
+
   it("max price ceiling blocks buys", () => {
     const p = planDca({ ...base, dca: { ...DEFAULT_DCA, maxPrice: 0.005 }, bestAsk: MA * 0.78 });
     expect(p.bandIndex).toBe(-1);

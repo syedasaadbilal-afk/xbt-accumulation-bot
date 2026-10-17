@@ -112,9 +112,9 @@ export async function createServer(opts: CreateServerOptions) {
         reply.code(400);
         return { error: "two bands have the same discount %" };
       }
-      if (bands.reduce((s, x) => s + (x.budgetPct ?? 0), 0) > 100.0001) {
+      if (bands.some((x) => (x.budgetPct ?? 0) > 100)) {
         reply.code(400);
-        return { error: "band budget shares must not add up to more than 100%" };
+        return { error: "a band's share of the budget cannot exceed 100%" };
       }
       dca = {
         intervalHours: d.intervalHours,
