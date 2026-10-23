@@ -4,6 +4,7 @@ import { NeoxaClient, type NeoxaBalance } from "./client.js";
 import { evaluateAlerts, sendNtfy } from "./alerts.js";
 import { runNeoxaTick, type NeoxaTickResult } from "./bot.js";
 import { NeoxaStore } from "./store.js";
+import { LarssonStore, larssonStatus, larssonTick } from "./larssonService.js";
 import { DEFAULT_DCA, bandIntervalHours, maFromCandles, planDca, planNextChunk, sortBands, sortTiers, windowIndex } from "./strategy.js";
 
 const BASE_URL = () => process.env.NEOXA_BASE_URL ?? "https://neoxa.exchange";
@@ -11,6 +12,7 @@ const BASE_URL = () => process.env.NEOXA_BASE_URL ?? "https://neoxa.exchange";
 /** Wires the Neoxa bot to the daemon: credentials, tick loop guard, dashboard status. */
 export class NeoxaService {
   readonly store: NeoxaStore;
+  readonly larsson: LarssonStore;
   lastResult: NeoxaTickResult | null = null;
   lastTickAt: number | null = null;
   private running = false;
@@ -21,6 +23,7 @@ export class NeoxaService {
     private readonly fetchImpl?: typeof fetch
   ) {
     this.store = new NeoxaStore(db);
+    this.larsson = new LarssonStore(db);
   }
 
   private client(): NeoxaClient {
@@ -33,7 +36,26 @@ export class NeoxaService {
     });
   }
 
+  /** Paper Larsson tracker: uses public endpoints only, independent of the DCA bot's enabled flag. Throttled to every 5 min. */
+  private lastLarssonAt = 0;
+  private async larssonTickThrottled(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastLarssonAt < 5 * 60_000) return;
+    this.lastLarssonAt = now;
+    try {
+      const r = await larssonTick({ client: this.client(), store: this.larsson, pair: this.store.getConfig().pair, now });
+      if (r.recorded) console.log(`[larsson] paper fill recorded: ${r.recorded}`);
+    } catch (err) {
+      console.error("[larsson] tick failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  async larssonStatus() {
+    return larssonStatus({ client: this.client(), store: this.larsson, pair: this.store.getConfig().pair });
+  }
+
   async tick(): Promise<void> {
+    await this.larssonTickThrottled();
     if (this.running) return;
     if (!hasNeoxaSecrets(this.dbPath)) {
       this.lastResult = { action: "idle", detail: "Neoxa API key not configured" };

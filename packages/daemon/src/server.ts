@@ -161,6 +161,18 @@ export async function createServer(opts: CreateServerOptions) {
     return { ok: true };
   });
 
+  fastify.get("/api/larsson", async () => neoxa.larssonStatus());
+
+  fastify.put("/api/larsson-config", async (req, reply) => {
+    const b = req.body as { enabled?: boolean; paperSizeXbt?: number } | undefined;
+    if (typeof b?.enabled !== "boolean" || typeof b.paperSizeXbt !== "number" || !Number.isFinite(b.paperSizeXbt) || b.paperSizeXbt <= 0 || b.paperSizeXbt > 100000) {
+      reply.code(400);
+      return { error: "need enabled (boolean) and paperSizeXbt (XBT) in (0, 100000]" };
+    }
+    neoxa.larsson.setConfig({ enabled: b.enabled, paperSizeXbt: b.paperSizeXbt });
+    return { ok: true };
+  });
+
   fastify.post("/api/alert-test", async () => neoxa.sendTestAlert());
   fastify.post("/api/cancel", async () => neoxa.cancelOpenOrder());
   fastify.post("/api/run-now", async () => {

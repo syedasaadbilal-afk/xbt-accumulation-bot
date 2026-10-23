@@ -114,5 +114,59 @@ export async function neoxaAlertTest(): Promise<{ ok: boolean; error?: string }>
     return { ok: false, error: "daemon unreachable" };
   }
 }
+export interface LarssonBarDto {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  v1: number | null;
+  m1: number | null;
+  m2: number | null;
+  v2: number | null;
+  regime: "orange" | "navy" | "gray" | null;
+  dist: number | null;
+  confirmed: boolean;
+}
+
+export interface LarssonTradeDto {
+  entryTime: number;
+  entrySignal: number | null;
+  entryActual: number | null;
+  exitTime: number | null;
+  exitSignal: number | null;
+  exitActual: number | null;
+  status: "open" | "closed";
+  signalReturnPct: number | null;
+  actualReturnPct: number | null;
+}
+
+export interface LarssonStatus {
+  config: { enabled: boolean; paperSizeXbt: number };
+  pair: string;
+  error: string | null;
+  barsCount: number;
+  reliableBars: number;
+  warmup: boolean;
+  holding: boolean;
+  current: { regime: "orange" | "navy" | "gray" | null; dist: number | null; confirmedBarTime: number } | null;
+  ticker: { bestBid: number; bestAsk: number; lastPrice: number } | null;
+  bars: LarssonBarDto[];
+  signals: Array<{ signalBarTime: number; action: "enter" | "exit"; signalPrice: number | null; execTime: number }>;
+  trades: LarssonTradeDto[];
+  summary: { trades: number; closed: number; wins: number; signalReturnPct: number; actualReturnPct: number | null };
+}
+
+export async function fetchLarsson(): Promise<LarssonStatus | undefined> {
+  try {
+    const res = await fetch("/api/larsson");
+    if (!res.ok) return undefined;
+    return (await res.json()) as LarssonStatus;
+  } catch {
+    return undefined;
+  }
+}
+export const saveLarssonConfig = (enabled: boolean, paperSizeXbt: number) => sendJson("PUT", "/api/larsson-config", { enabled, paperSizeXbt });
+
 export const neoxaCancelOpenOrder = () => sendJson("POST", "/api/cancel");
 export const neoxaRunNow = () => sendJson("POST", "/api/run-now");
