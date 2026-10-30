@@ -168,6 +168,21 @@ export function XbtTab() {
         <Stat label="Spent so far (BTC)" value={fmtBtc(status.state.spentBtc)} />
         <Stat label="Bought so far (XBT)" value={status.state.boughtXbt.toFixed(4)} />
         <Stat
+          label="Average cost (BTC/XBT)"
+          value={status.state.boughtXbt > 0 ? (status.state.spentBtc / status.state.boughtXbt).toFixed(8) : "-"}
+        />
+        <Stat
+          label="Last vs average cost"
+          value={
+            status.state.boughtXbt > 0 && t
+              ? (() => {
+                  const pct = (t.lastPrice / (status.state.spentBtc / status.state.boughtXbt) - 1) * 100;
+                  return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+                })()
+              : "-"
+          }
+        />
+        <Stat
           label="Open order"
           value={status.state.openOrderId ? `${status.state.openOrderQty} @ ${status.state.openOrderPrice}` : "none"}
         />
