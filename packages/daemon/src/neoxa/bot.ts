@@ -26,6 +26,8 @@ interface Plan {
   bandKey: number | null;
   /** DCA: id of the band's current interval window. */
   windowId?: number;
+  /** DCA: chunks still to buy in this interval (a partly filled chunk leaves a fraction). */
+  quotaLeft?: number;
   label: string;
   reason: string;
 }
@@ -85,6 +87,7 @@ function makePlan(params: {
     remainingBtc: p.remainingBtc,
     bandKey: p.bandKey,
     windowId: p.windowId,
+    quotaLeft: Math.max(0, p.chunksAllowed - p.windowChunks),
     label: `band ${p.bandIndex + 1} (${p.discountPct.toFixed(1)}% vs MA${dca.maPeriod} ${ma?.toFixed(8)}, ${p.chunksAllowed} chunk/${p.intervalHours}h)`,
     reason: p.bandIndex < 0 ? `${p.reason} (ask ${bestAsk}, MA ${ma?.toFixed(8)}, ${p.discountPct.toFixed(1)}% below)` : "ok",
   };
@@ -167,9 +170,14 @@ export async function runNeoxaTick(params: {
     const maxByPlan = plan.remainingBtc / price;
     const btcAvailable = balances["BTC"]?.available ?? 0;
     const maxByBalance = (btcAvailable * 0.998) / price;
-    const wantQty = btcSized(cfg) ? (cfg.chunkBtc as number) / price : cfg.chunkXbt;
+    // After a partial fill, order only the unfilled part of the chunk, not a whole new one.
+    const partial = plan.quotaLeft !== undefined && plan.quotaLeft < 1 - 1e-6 ? plan.quotaLeft : 1;
+    const wantQty = (btcSized(cfg) ? (cfg.chunkBtc as number) / price : cfg.chunkXbt) * partial;
     let quantity = Math.min(wantQty, maxByPlan, maxByBalance);
     quantity = Math.floor(quantity * 10 ** qtyDigits + 1e-9) / 10 ** qtyDigits;
+    if (partial < 1 && quantity < pairInfo.minQuantity) {
+      return { action: "idle", detail: `interval quota nearly filled (remainder ${quantity} XBT is below the exchange minimum)` };
+    }
     // A BTC-sized chunk can fall just below the exchange minimum at a high price: buy the minimum instead, if the plan and balance allow it.
     if (btcSized(cfg) && quantity < pairInfo.minQuantity && maxByPlan >= pairInfo.minQuantity && maxByBalance >= pairInfo.minQuantity) {
       quantity = Math.ceil(pairInfo.minQuantity * 10 ** qtyDigits - 1e-9) / 10 ** qtyDigits;

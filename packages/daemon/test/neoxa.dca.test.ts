@@ -102,7 +102,15 @@ function fakeClient(opts: { bestBid: number; bestAsk: number; btc: number; ma: n
     o.status = "filled";
     o.active = false;
   };
-  return { client, placed, fillAll };
+  /** The open order ends cancelled after filling only `frac` of its quantity. */
+  const fillPart = (frac: number) => {
+    const o = [...orders.values()].find((x) => x.active)!;
+    o.quantity_filled = o.quantity * frac;
+    o.quantity_remaining = o.quantity - o.quantity_filled;
+    o.status = "cancelled";
+    o.active = false;
+  };
+  return { client, placed, fillAll, fillPart };
 }
 
 describe("dca bot", () => {
@@ -134,6 +142,17 @@ describe("dca bot", () => {
     f.fillAll();
     expect((await runNeoxaTick({ client: f.client, store, now: NOW + 30 * 60_000 })).action).toBe("idle");
     expect((await runNeoxaTick({ client: f.client, store, now: NOW + H + 1000 })).action).toBe("placed");
+  });
+
+  it("after a partial fill, the next order is only the unfilled remainder", async () => {
+    const f = fakeClient({ bestBid: MA * 0.88 - 0.0001, bestAsk: MA * 0.88, btc: 1, ma: MA });
+    await runNeoxaTick({ client: f.client, store, now: NOW });
+    f.fillPart(0.4);
+    expect((await runNeoxaTick({ client: f.client, store, now: NOW + 60_000 })).action).toBe("placed");
+    expect(f.placed).toHaveLength(2);
+    expect(f.placed[0]!.quantity * 0.4 + f.placed[1]!.quantity).toBeCloseTo(0.25, 6);
+    f.fillAll();
+    expect((await runNeoxaTick({ client: f.client, store, now: NOW + 120_000 })).action).toBe("idle");
   });
 
   it("tracks spend per band", async () => {
