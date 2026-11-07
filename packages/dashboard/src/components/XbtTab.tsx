@@ -51,6 +51,8 @@ export function XbtTab() {
   const [maPeriod, setMaPeriod] = useState("30");
   const [maxPrice, setMaxPrice] = useState("0");
   const [bands, setBands] = useState<Array<{ discountPct: string; chunks: string; budgetPct: string; intervalHours: string }>>([]);
+  const [chunkUnit, setChunkUnit] = useState<"XBT" | "BTC">("XBT");
+  const [chunkBtc, setChunkBtc] = useState("0.002");
   const [reset, setReset] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [note, setNote] = useState<string | undefined>(undefined);
@@ -66,6 +68,8 @@ export function XbtTab() {
       setMode(s.config.mode);
       setBudget(String(s.config.budgetBtc));
       setChunk(String(s.config.chunkXbt));
+      setChunkUnit(s.config.chunkUnit ?? "XBT");
+      setChunkBtc(String(s.config.chunkBtc ?? 0.002));
       setPostOnly(s.config.postOnly);
       setTiers(s.config.tiers.map((t) => ({ price: String(t.price), pct: String(t.pct) })));
       setFloatWarn(String(s.config.floatWarnBtc));
@@ -110,7 +114,7 @@ export function XbtTab() {
     parsedBands.length > 0 &&
     parsedBands.every((b) => Number.isFinite(b.discountPct) && b.chunks >= 0 && b.budgetPct > 0 && b.budgetPct <= 100 && b.intervalHours >= 0.25);
   const topicValid = alertTopic.trim() === "" || /^[A-Za-z0-9_-]{8,64}$/.test(alertTopic.trim());
-  const valid = Number(budget) >= 0 && Number(chunk) > 0 && Number(floatWarn) >= 0 && topicValid && (strategy === "DCA" ? dcaValid : tiersValid);
+  const valid = Number(budget) >= 0 && (chunkUnit === "BTC" ? Number(chunkBtc) > 0 : Number(chunk) > 0) && Number(floatWarn) >= 0 && topicValid && (strategy === "DCA" ? dcaValid : tiersValid);
 
   async function testAlert() {
     const r = await neoxaAlertTest();
@@ -122,7 +126,9 @@ export function XbtTab() {
       enabled,
       mode,
       budgetBtc: Number(budget),
-      chunkXbt: Number(chunk),
+      chunkXbt: Number(chunk) > 0 ? Number(chunk) : 0.25,
+      chunkUnit,
+      chunkBtc: Number(chunkBtc),
       postOnly,
       tiers: parsedTiers,
       strategy,
@@ -237,9 +243,22 @@ export function XbtTab() {
             <div className={`text-xs ${topicValid ? "text-slate-600" : "text-rose-400"}`}>
               Subscribe to this topic in the ntfy iPhone app. Keep it private (it acts as the password). Save settings before testing.
             </div>
-            <div className="flex items-center gap-2">
-              <span className="w-44">Order size (XBT)</span>
-              <input className={`${inputCls} w-36`} type="number" step="0.05" min="0" value={chunk} onChange={(e) => setChunk(e.target.value)} />
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="w-44">Order size</span>
+              {chunkUnit === "XBT" ? (
+                <input className={`${inputCls} w-36`} type="number" step="0.05" min="0" value={chunk} onChange={(e) => setChunk(e.target.value)} />
+              ) : (
+                <input className={`${inputCls} w-36`} type="number" step="0.0005" min="0" value={chunkBtc} onChange={(e) => setChunkBtc(e.target.value)} />
+              )}
+              <select className={`${inputCls} w-20`} value={chunkUnit} onChange={(e) => setChunkUnit(e.target.value as "XBT" | "BTC")}>
+                <option value="BTC">BTC</option>
+                <option value="XBT">XBT</option>
+              </select>
+              <span className="text-xs text-slate-500">
+                {chunkUnit === "BTC"
+                  ? `fixed BTC per order: more XBT at lower prices${t && Number(chunkBtc) > 0 ? ` (about ${(Number(chunkBtc) / t.bestAsk).toFixed(3)} XBT at the current ask)` : ""}`
+                  : `fixed XBT per order${t && Number(chunk) > 0 ? ` (about ${(Number(chunk) * t.bestAsk).toFixed(6)} BTC at the current ask)` : ""}`}
+              </span>
             </div>
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={postOnly} onChange={(e) => setPostOnly(e.target.checked)} />

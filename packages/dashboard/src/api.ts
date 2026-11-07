@@ -53,6 +53,8 @@ export interface NeoxaStatus {
     pair: string;
     budgetBtc: number;
     chunkXbt: number;
+    chunkUnit: "XBT" | "BTC";
+    chunkBtc: number;
     postOnly: boolean;
     tiers: NeoxaTierDto[];
   };
@@ -97,6 +99,8 @@ export const saveNeoxaConfig = (cfg: {
   mode: BotMode;
   budgetBtc: number;
   chunkXbt: number;
+  chunkUnit: "XBT" | "BTC";
+  chunkBtc: number;
   postOnly: boolean;
   tiers: NeoxaTierDto[];
   strategy: "DCA" | "TIERS";

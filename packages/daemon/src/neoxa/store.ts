@@ -20,6 +20,9 @@ export interface NeoxaConfig {
   /** Total BTC the bot may spend on XBT (the "float" you deposited). */
   budgetBtc: number;
   chunkXbt: number;
+  /** Order size unit: XBT = fixed quantity per chunk (chunkXbt); BTC = fixed BTC spend per chunk (chunkBtc), so more XBT is bought at lower prices. */
+  chunkUnit?: "XBT" | "BTC";
+  chunkBtc?: number;
   postOnly: boolean;
   tiers: NeoxaTier[];
 }
@@ -64,6 +67,8 @@ export const DEFAULT_NEOXA_CONFIG: NeoxaConfig = {
   pair: "BTCB2_BTC",
   budgetBtc: 0,
   chunkXbt: 0.25,
+  chunkUnit: "XBT",
+  chunkBtc: 0.002,
   postOnly: true,
   tiers: DEFAULT_NEOXA_TIERS,
 };
@@ -73,7 +78,7 @@ export class NeoxaStore {
 
   getConfig(): NeoxaConfig {
     const row = this.db.prepare("SELECT * FROM neoxa_config WHERE id = 1").get() as
-      | { enabled: number; mode: string; pair: string; budget_btc: number; chunk_xbt: number; post_only: number; tiers_json: string; strategy: string; dca_json: string; float_warn_btc: number; alert_topic: string }
+      | { enabled: number; mode: string; pair: string; budget_btc: number; chunk_xbt: number; post_only: number; tiers_json: string; strategy: string; dca_json: string; float_warn_btc: number; alert_topic: string; chunk_unit: string; chunk_btc: number }
       | undefined;
     if (!row) {
       return {
@@ -106,6 +111,8 @@ export class NeoxaStore {
       pair: row.pair,
       budgetBtc: row.budget_btc,
       chunkXbt: row.chunk_xbt,
+      chunkUnit: row.chunk_unit === "BTC" ? "BTC" : "XBT",
+      chunkBtc: row.chunk_btc > 0 ? row.chunk_btc : 0.002,
       postOnly: row.post_only === 1,
       tiers,
     };
@@ -114,12 +121,12 @@ export class NeoxaStore {
   setConfig(c: NeoxaConfig): void {
     this.db
       .prepare(
-        `INSERT INTO neoxa_config (id, enabled, mode, pair, budget_btc, chunk_xbt, post_only, tiers_json, strategy, dca_json, float_warn_btc, alert_topic, updated_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO neoxa_config (id, enabled, mode, pair, budget_btc, chunk_xbt, post_only, tiers_json, strategy, dca_json, float_warn_btc, alert_topic, chunk_unit, chunk_btc, updated_at)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, mode = excluded.mode, pair = excluded.pair, budget_btc = excluded.budget_btc,
            chunk_xbt = excluded.chunk_xbt, post_only = excluded.post_only, tiers_json = excluded.tiers_json,
            strategy = excluded.strategy, dca_json = excluded.dca_json, float_warn_btc = excluded.float_warn_btc,
-           alert_topic = excluded.alert_topic, updated_at = excluded.updated_at`
+           alert_topic = excluded.alert_topic, chunk_unit = excluded.chunk_unit, chunk_btc = excluded.chunk_btc, updated_at = excluded.updated_at`
       )
       .run(
         c.enabled ? 1 : 0,
@@ -133,6 +140,8 @@ export class NeoxaStore {
         JSON.stringify(c.dca ?? DEFAULT_DCA),
         c.floatWarnBtc ?? 0.02,
         c.alertTopic ?? "",
+        c.chunkUnit ?? "XBT",
+        c.chunkBtc ?? 0.002,
         Date.now()
       );
   }

@@ -56,6 +56,8 @@ export async function createServer(opts: CreateServerOptions) {
           mode?: string;
           budgetBtc?: number;
           chunkXbt?: number;
+          chunkUnit?: string;
+          chunkBtc?: number;
           postOnly?: boolean;
           tiers?: Array<{ price?: number; pct?: number }>;
           strategy?: string;
@@ -86,6 +88,16 @@ export async function createServer(opts: CreateServerOptions) {
     ) {
       reply.code(400);
       return { error: "invalid config: need enabled, mode, postOnly, budgetBtc>=0 and chunkXbt>0" };
+    }
+    const chunkUnit = b.chunkUnit === "BTC" ? "BTC" : "XBT";
+    const chunkBtc = b.chunkBtc === undefined ? (current.chunkBtc ?? 0.002) : b.chunkBtc;
+    if (!okNum(chunkBtc) || chunkBtc < 0 || (chunkUnit === "BTC" && chunkBtc <= 0)) {
+      reply.code(400);
+      return { error: "order size in BTC must be above 0" };
+    }
+    if (chunkUnit === "BTC" && b.budgetBtc > 0 && chunkBtc > b.budgetBtc) {
+      reply.code(400);
+      return { error: "order size in BTC cannot be larger than the budget" };
     }
     if (tiers.length < 1 || tiers.length > 5 || tiers.some((t) => !okNum(t.price) || t.price <= 0 || !okNum(t.pct) || t.pct <= 0)) {
       reply.code(400);
@@ -150,6 +162,8 @@ export async function createServer(opts: CreateServerOptions) {
       pair: current.pair,
       budgetBtc: b.budgetBtc,
       chunkXbt: b.chunkXbt,
+      chunkUnit,
+      chunkBtc,
       postOnly: b.postOnly,
       tiers: tiers.map((t) => ({ price: t.price as number, pct: t.pct as number })),
     });

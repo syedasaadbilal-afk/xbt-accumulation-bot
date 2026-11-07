@@ -30,6 +30,11 @@ interface Plan {
   reason: string;
 }
 
+/** True when orders are sized as a fixed BTC spend instead of a fixed XBT quantity. */
+function btcSized(cfg: NeoxaConfig): boolean {
+  return (cfg.chunkUnit ?? "XBT") === "BTC" && (cfg.chunkBtc ?? 0) > 0;
+}
+
 function dcaOf(cfg: NeoxaConfig): DcaConfig {
   return cfg.dca ?? DEFAULT_DCA;
 }
@@ -162,8 +167,13 @@ export async function runNeoxaTick(params: {
     const maxByPlan = plan.remainingBtc / price;
     const btcAvailable = balances["BTC"]?.available ?? 0;
     const maxByBalance = (btcAvailable * 0.998) / price;
-    let quantity = Math.min(cfg.chunkXbt, maxByPlan, maxByBalance);
+    const wantQty = btcSized(cfg) ? (cfg.chunkBtc as number) / price : cfg.chunkXbt;
+    let quantity = Math.min(wantQty, maxByPlan, maxByBalance);
     quantity = Math.floor(quantity * 10 ** qtyDigits + 1e-9) / 10 ** qtyDigits;
+    // A BTC-sized chunk can fall just below the exchange minimum at a high price: buy the minimum instead, if the plan and balance allow it.
+    if (btcSized(cfg) && quantity < pairInfo.minQuantity && maxByPlan >= pairInfo.minQuantity && maxByBalance >= pairInfo.minQuantity) {
+      quantity = Math.ceil(pairInfo.minQuantity * 10 ** qtyDigits - 1e-9) / 10 ** qtyDigits;
+    }
     if (quantity < pairInfo.minQuantity || quantity <= 0) {
       return { action: "blocked", detail: `chunk below minimum (qty ${quantity}); BTC available ${btcAvailable}` };
     }
@@ -228,10 +238,16 @@ async function settleOrder(
     bandSpent[k] = (bandSpent[k] ?? 0) + filled * price;
   }
   const windows = { ...state.windows };
-  if (state.openOrderBand !== null && filled > 0 && cfg.chunkXbt > 0) {
+  const chunkSize = btcSized(cfg) ? (cfg.chunkBtc as number) : cfg.chunkXbt; // in BTC or XBT, matching how orders are sized
+  if (state.openOrderBand !== null && filled > 0 && chunkSize > 0) {
     const k = String(state.openOrderBand);
     const w = windows[k];
-    if (w) windows[k] = { id: w.id, chunks: w.chunks + filled / cfg.chunkXbt };
+    if (w) {
+      const frac = btcSized(cfg) ? (filled * price) / chunkSize : filled / chunkSize;
+      // Rounding the quantity down to the exchange precision leaves a BTC-sized chunk a hair under 1: count it as a whole chunk.
+      const credited = btcSized(cfg) && frac >= 0.95 && frac < 1 ? 1 : frac;
+      windows[k] = { id: w.id, chunks: w.chunks + credited };
+    }
   }
   const next = {
     ...state,

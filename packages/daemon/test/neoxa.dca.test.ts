@@ -71,12 +71,12 @@ function candles(closeAll: number, n = 40) {
   return Array.from({ length: n }, (_, i) => ({ time: i * 14_400, open: closeAll, high: closeAll, low: closeAll, close: closeAll, volume: 1 }));
 }
 
-function fakeClient(opts: { bestBid: number; bestAsk: number; btc: number; ma: number }) {
+function fakeClient(opts: { bestBid: number; bestAsk: number; btc: number; ma: number; minQuantity?: number; quantityPrecision?: number }) {
   const placed: Array<{ quantity: number; price: number }> = [];
   const orders = new Map<string, NeoxaOrder & { active: boolean }>();
   let n = 0;
   const client = {
-    getPairInfo: async () => ({ pair: "BTCB2_BTC", minQuantity: 1e-8, pricePrecision: 8, quantityPrecision: 8, tradingPaused: false, makerFeeRate: 0.001, takerFeeRate: 0.002 }),
+    getPairInfo: async () => ({ pair: "BTCB2_BTC", minQuantity: opts.minQuantity ?? 1e-8, pricePrecision: 8, quantityPrecision: opts.quantityPrecision ?? 8, tradingPaused: false, makerFeeRate: 0.001, takerFeeRate: 0.002 }),
     getOrderBook: async () => ({ bids: [{ price: opts.bestBid, quantity: 4 }], asks: [{ price: opts.bestAsk, quantity: 3 }] }),
     getBalances: async () => ({ BTC: { available: opts.btc, locked: 0, total: opts.btc, in_orders: 0 } }),
     getCandles: async () => candles(opts.ma),
@@ -151,5 +151,53 @@ describe("dca bot", () => {
     const r = await runNeoxaTick({ client: f.client, store, now: NOW });
     expect(r.action).toBe("idle");
     expect(f.placed).toHaveLength(0);
+  });
+});
+
+describe("order size in BTC", () => {
+  let store: NeoxaStore;
+  beforeEach(() => {
+    const db = openDatabase(":memory:");
+    applyMigrations(db);
+    store = new NeoxaStore(db);
+    store.setConfig({ ...store.getConfig(), enabled: true, mode: "LIVE", budgetBtc: 0.05, chunkXbt: 0.25, chunkUnit: "BTC", chunkBtc: 0.002 });
+  });
+
+  it("spends the same BTC per order, so it buys more XBT at a lower price", async () => {
+    const lo = fakeClient({ bestBid: MA * 0.88 - 0.0001, bestAsk: MA * 0.88, btc: 1, ma: MA });
+    await runNeoxaTick({ client: lo.client, store, now: NOW });
+    const hi = fakeClient({ bestBid: MA * 0.99 - 0.0001, bestAsk: MA * 0.99, btc: 1, ma: MA });
+    const store2 = new NeoxaStore((() => { const d = openDatabase(":memory:"); applyMigrations(d); return d; })());
+    store2.setConfig({ ...store.getConfig() });
+    await runNeoxaTick({ client: hi.client, store: store2, now: NOW });
+    const a = lo.placed[0]!;
+    const b = hi.placed[0]!;
+    expect(a.quantity * a.price).toBeCloseTo(0.002, 6);
+    expect(b.quantity * b.price).toBeCloseTo(0.002, 6);
+    expect(a.quantity).toBeGreaterThan(b.quantity); // lower price buys more XBT
+  });
+
+  it("counts a chunk as whole even when the quantity is rounded down to a coarse precision", async () => {
+    // 0.002 BTC at ~0.00766 = 0.261 XBT, rounded down to 2 decimals = 0.26 (a hair under one chunk)
+    const f = fakeClient({ bestBid: MA * 0.88 - 0.0001, bestAsk: MA * 0.88, btc: 1, ma: MA, quantityPrecision: 2 });
+    expect((await runNeoxaTick({ client: f.client, store, now: NOW })).action).toBe("placed");
+    f.fillAll();
+    const second = await runNeoxaTick({ client: f.client, store, now: NOW + 60_000 });
+    expect(second.action).toBe("idle");
+    expect(second.detail).toContain("quota");
+    expect(f.placed).toHaveLength(1);
+  });
+
+  it("buys the exchange minimum when a BTC-sized chunk falls just below it", async () => {
+    const f = fakeClient({ bestBid: MA * 0.88 - 0.0001, bestAsk: MA * 0.88, btc: 1, ma: MA, minQuantity: 0.5, quantityPrecision: 2 });
+    expect((await runNeoxaTick({ client: f.client, store, now: NOW })).action).toBe("placed");
+    expect(f.placed[0]!.quantity).toBeCloseTo(0.5, 8);
+  });
+
+  it("defaults to XBT sizing and keeps the old behaviour", async () => {
+    store.setConfig({ ...store.getConfig(), chunkUnit: "XBT" });
+    const f = fakeClient({ bestBid: MA * 0.88 - 0.0001, bestAsk: MA * 0.88, btc: 1, ma: MA });
+    await runNeoxaTick({ client: f.client, store, now: NOW });
+    expect(f.placed[0]!.quantity).toBeCloseTo(0.25, 8);
   });
 });

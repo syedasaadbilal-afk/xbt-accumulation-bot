@@ -1,7 +1,7 @@
 {
   "name": "xbt-accumulation-bot",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.6",
   "description": "Tiered accumulation bot for XBT (Bitcoin BLAKE2b) / BTC on Neoxa Exchange. Spot buys only, one limit order open at a time.",
   "workspaces": [
     "packages/*"

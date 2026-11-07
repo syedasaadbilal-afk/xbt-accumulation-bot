@@ -1,9 +1,9 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 export const current = VersionInfo.of({
-  version: '0.1.5:0',
+  version: '0.1.6:0',
   releaseNotes: {
     en_US:
-      'Accumulation tab: new tiles for average cost (BTC per XBT) and last price versus average cost.',
+      'Order size can now be set in BTC instead of XBT: each order spends a fixed amount of BTC, so more XBT is bought at lower prices. The Config tab has a BTC or XBT switch next to Order size; existing settings stay in XBT.',
   },
   migrations: { up: async ({ effects }) => {}, down: IMPOSSIBLE },
 })
