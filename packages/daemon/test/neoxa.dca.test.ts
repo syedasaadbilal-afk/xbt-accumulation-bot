@@ -42,6 +42,22 @@ describe("dca strategy", () => {
     expect(planDca({ ...base, bestAsk: ask, now: NOW + H, windows: { "25": { id: wid, chunks: 2 } } }).bandIndex).toBeGreaterThanOrEqual(0);
   });
 
+  it("moving UP into a shallower band stays blocked until the deeper band's interval has ended", () => {
+    const w2 = windowIndex(NOW, 2);
+    const deeperBought = { "10": { id: w2, chunks: 2 } }; // band 10% (2h) already bought this window
+    const up = planDca({ ...base, bestAsk: MA * 0.97, windows: deeperBought }); // price back up: band -15 (4h) active
+    expect(up.bandIndex).toBe(-1);
+    expect(up.reason).toContain("deeper band");
+    // an hour later it is still the same 2h window -> still blocked
+    expect(planDca({ ...base, bestAsk: MA * 0.97, now: NOW + H, windows: deeperBought }).bandIndex).toBe(-1);
+    // once that 2h window is over, the shallower band may buy
+    expect(planDca({ ...base, bestAsk: MA * 0.97, now: NOW + 2 * H, windows: deeperBought }).bandIndex).toBeGreaterThanOrEqual(0);
+    // a deeper band that bought nothing does not block
+    expect(planDca({ ...base, bestAsk: MA * 0.97, windows: { "10": { id: w2, chunks: 0 } } }).bandIndex).toBeGreaterThanOrEqual(0);
+    // an open order is never cancelled by this rule (status/stale checks ignore the window)
+    expect(planDca({ ...base, bestAsk: MA * 0.97, windows: deeperBought, ignoreWindow: true }).bandIndex).toBeGreaterThanOrEqual(0);
+  });
+
   it("a band cannot spend more than its share of the budget", () => {
     const ask = MA * 0.78; // 22% below -> band 20: 25% of 0.05 = 0.0125
     expect(planDca({ ...base, bestAsk: ask, bandSpent: { "20": 0.01 } }).remainingBtc).toBeCloseTo(0.0025, 9);

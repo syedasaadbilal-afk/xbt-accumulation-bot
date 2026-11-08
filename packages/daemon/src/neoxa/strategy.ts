@@ -172,6 +172,19 @@ export function planDca(params: {
   const bandLeft = cap - (params.bandSpent[String(band.discountPct)] ?? 0);
   if (bandLeft <= 1e-7) return none(`band budget used (${band.budgetPct}% of budget)`, discountPct);
   const remaining = Math.min(bandLeft, totalLeft);
+  // Price moving UP into a shallower band must not stack a fresh chunk on top of a deeper band's buys:
+  // stay blocked until that deeper band's current interval has ended. (Moving DOWN into a deeper band is free.)
+  if (!params.ignoreWindow) {
+    for (let j = idx + 1; j < bands.length; j++) {
+      const bj = bands[j]!;
+      const hj = bandIntervalHours(params.dca, bj);
+      const wj = params.windows[String(bj.discountPct)];
+      if (wj && wj.id === windowIndex(params.now, hj) && wj.chunks > 1e-6) {
+        const until = (wj.id + 1) * hj * 3_600_000;
+        return none(`deeper band (${bj.discountPct}% below MA) already bought this interval; waiting until it ends at ${new Date(until).toISOString().slice(11, 16)} UTC`, discountPct);
+      }
+    }
+  }
   const hours = bandIntervalHours(params.dca, band);
   const windowId = windowIndex(params.now, hours);
   const w = params.windows[String(band.discountPct)];
